@@ -1,0 +1,78 @@
+import json
+from typing import Dict, Any, List, Optional
+
+def extract_fields_from_json(json_log_string: str, fields_to_extract: List[str]) -> Optional[Dict[str, Any]]:
+    """
+    Parses a JSON log string and extracts a list of specified fields.
+
+    Args:
+        json_log_string: The single log entry as a JSON formatted string.
+        fields_to_extract: A list of field names (keys) to retrieve from the JSON.
+
+    Returns:
+        A dictionary containing only the extracted fields, or None if the JSON
+        string is invalid.
+    """
+    try:
+        # 1. Parse the JSON string into a Python dictionary
+        log_data = json.loads(json_log_string)
+
+        # 2. Extract the desired fields
+        extracted_data = {}
+        for field in fields_to_extract:
+            # The .get() method safely retrieves the value, using None if the key doesn't exist
+            # This prevents the script from crashing if a log entry is missing a field
+            extracted_data[field] = log_data.get(field)
+            
+        return extracted_data
+    
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON: {e}")
+        return None
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+        return None
+
+# --- Example Usage ---
+if __name__ == "__main__":
+    
+    # 1. Example of a single JSON log string
+    example_log_string = '{"timestamp": "2024-01-15T10:00:00Z", "level": "INFO", "source_ip": "192.168.1.10", "event_id": 4001, "message": "User login successful for user: rfolsom"}'
+    
+    # 2. Define the fields you want to extract
+    fields = ["timestamp", "source_ip", "user", "message", "event_id"]
+    
+    # 3. Process the log
+    extracted = extract_fields_from_json(example_log_string, fields)
+    
+    if extracted:
+        print("--- Extracted Data from Single Log ---")
+        for key, value in extracted.items():
+            print(f"{key}: {value}")
+    
+    print("\n" + "="*50 + "\n")
+    
+    # 4. Example of processing a file containing multiple JSON log lines
+    # (Assuming a file named 'logs.jsonl' where each line is a valid JSON object)
+    
+    # Simulate a log file content (logs.jsonl)
+    log_file_content = [
+        '{"timestamp": "2024-01-15T10:01:00Z", "level": "ERROR", "source_ip": "203.0.113.5", "event_id": 5002, "message": "Database connection failed", "user": "sysadmin"}',
+        '{"timestamp": "2024-01-15T10:02:00Z", "level": "WARNING", "source_ip": "10.0.0.1", "event_id": 3005, "message": "High CPU usage"}',
+        '{"not_json": "this line will fail to parse"}' # Example of a bad line
+    ]
+    
+    print("--- Processing Simulated Log File (Line by Line) ---")
+    fields_to_track = ["timestamp", "level", "source_ip", "user"] # Note: 'user' is missing in one log
+    
+    for i, line in enumerate(log_file_content):
+        print(f"\nProcessing Line {i+1}:")
+        file_extracted = extract_fields_from_json(line.strip(), fields_to_track)
+        
+        if file_extracted:
+            print("  Successfully Extracted:")
+            for key, value in file_extracted.items():
+                # Note how 'user' is None for the second log, which is safe
+                print(f"    {key}: {value}")
+        else:
+            print("  Skipped due to parsing error.")
