@@ -1,0 +1,135 @@
+import socket
+import re
+
+# Configuration
+UDP_IP = "0.0.0.0"  # Listen on all interfaces
+UDP_PORT = 514      # The default Syslog UDP port (requires root/admin privileges)
+# You must configure your UniFi Controller to send logs to the machine running this script on this port.
+
+def parse_cef_log(log_message):
+    """
+    Parses a Common Event Format (CEF) log message.
+
+    A CEF message has two parts: 
+    1. A standard header separated by pipe characters (|).
+    2. An extension block with key-value pairs.
+    """
+    if not log_message.startswith("CEF:"):
+        # Handle non-CEF messages (e.g., standard Syslog)
+        return {"raw_message": log_message, "is_cef": False}
+
+    # Split the standard header
+    # The CEF format has 7 pipes for the standard header fields
+    parts = log_message.split('|', 8) 
+    
+
+    # Check if we have enough parts (CEF:V|Vd|Pr|Pv|Dc|Nm|Sev|[Ext])
+    if len(parts) < 8:
+        return {"raw_message": log_message, "is_cef": True, "error": "Incomplete CEF header"}
+
+    # Define the standard header fields
+    header_keys = [
+        "raw_prefix",         # CEF:Version (e.g., CEF:0)
+        "deviceVendor", 
+        "deviceProduct", 
+        "deviceVersion", 
+        "deviceEventClassId", 
+        "name", 
+        "severity"
+    ]
+    
+    # Map the first 7 parts to the header keys
+    parsed_log = dict(zip(header_keys, parts[:-1]))
+    
+    # 2. Parse the extension block (the 8th part)
+    extension = parts[-1]
+    parsed_log["extension"] = {}
+    
+    # Basic regex for key=value pairs in the extension block.
+    # It looks for 'key=' followed by a value that ends with a space or the end of the string,
+    # and handles spaces within quotes (if Ubiquiti uses them).
+    # NOTE: Real-world CEF parsing is complex. This is a simple implementation.
+    
+    # Key-value pairs are often separated by a space, and values may be quoted.
+    # We use a pattern to find key=value, where value is either quoted or until the next space.
+    # This is a very basic parser and may fail on complex values.
+    # A more robust solution would be needed for production.
+    
+    # It assumes keys are followed by '=' and values are everything until the next key or end of string.
+    
+    # This regex is an improvement: it looks for 'key=' followed by either a quoted string
+    # or a non-quoted string up to the next space/key.
+    # For Ubiquiti logs, simple key=value parsing is often sufficient.
+    
+    # Use a simple regex to extract key-value pairs separated by spaces.
+    # This assumes values without spaces or quoted values.
+    
+    # Example simple regex: (key=value\s) or (key=value$)
+       
+    extension_data = {}
+    
+    # Regex to find key=value pairs, handling common issues like quoted values or escaped characters
+     
+    # Split the extension block into tokens, and then each token by '='
+        
+    # Regex for CEF extension parsing:
+    pattern = re.compile(r'(\w+)=(".*?"|[^ ]+)')
+    
+    # Find all matches in the extension string
+    matches = pattern.findall(extension)
+    
+    for key, value in matches:
+        # Remove surrounding quotes if they exist
+        if value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        extension_data[key] = value
+
+    parsed_log["extension"] = extension_data
+    parsed_log["is_cef"] = True
+    
+    return parsed_log
+
+def start_syslog_listener(ip, port):
+    """Starts a UDP listener to receive logs and parses them."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.bind((ip, port))
+        print(f"Listening for Ubiquiti Syslog data on {ip}:{port}...")
+
+        while True:
+            # Receive up to 65535 bytes (max size of a UDP datagram)
+            data, addr = sock.recvfrom(65535)
+            # Use 'latin-1' or 'utf-8' with 'ignore' error handling for robust Syslog data
+            log_message = data.decode('utf-8', errors='ignore').strip()
+
+            print(f"\n{'='*20} RECEIVED LOG {'='*20}")
+            print(f"Source: {addr[0]}")
+            print(f"Raw Message:\n{log_message}")
+
+            parsed_data = parse_cef_log(log_message)
+            
+            if parsed_data.get("is_cef"):
+                print("\nParsed CEF Data:")
+                # Print standard header fields
+                print("  --- Header Fields ---")
+                for key in ["deviceVendor", "deviceProduct", "name", "severity"]:
+                    print(f"  {key}: {parsed_data.get(key)}")
+                
+                # Print extension (key-value) fields
+                if parsed_data.get("extension"):
+                    print("  --- Extension Fields (Key=Value) ---")
+                    for key, value in parsed_data["extension"].items():
+                        print(f"  {key}: {value}")
+                else:
+                    print("  No extension fields found.")
+            else:
+                print("\nNon-CEF/Standard Syslog Message.")
+            
+            print(f"{'='*20} END LOG {'='*20}")
+
+
+    except PermissionError:
+        print(f"\nError: You may need root/administrator privileges to bind to port {port}.")
+        print("Try using a port number greater than 1024, or run as administrator/root.")
+    except Exception as e:
+        print(f"\nAn error occurred: {e}")
