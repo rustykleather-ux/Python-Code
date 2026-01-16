@@ -1,0 +1,100 @@
+# SCRIPT: Remove-Hamachi-Remote.ps1
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string[]]$ComputerName,  # Accepts a single name or an array of names (e.g., "Server1", "Server2")
+    [string]$AppName = "LogMeIn Hamachi"
+)
+
+# Define the script block to be executed on the remote computer(s)
+# This block contains the logic to find and execute the silent uninstaller.
+$UninstallScriptBlock = {
+    param(
+        [string]$AppToRemove
+    )
+    
+    # Nested function to handle the core uninstallation logic on the remote machine
+    function Invoke-HamachiUninstall {
+        param(
+            [string]$AppDisplayName,
+            [string]$RegistryPath
+        )
+
+        $Result = @{
+            Computer = $env:COMPUTERNAME
+            Status   = "NotFound"
+            Message  = "Application '$AppDisplayName' not found in registry path: $RegistryPath."
+        }
+
+        try {
+            # Search the registry for the application's uninstall information
+            $UninstallItems = Get-ItemProperty -Path $RegistryPath | 
+                              Where-Object { $_.DisplayName -like "*$AppDisplayName*" } -ErrorAction SilentlyContinue
+
+            if ($UninstallItems) {
+                $Result.Status = "Found"
+                $Result.Message = "Found uninstall information. Attempting silent uninstall."
+
+                foreach ($Item in $UninstallItems) {
+                    $UninstallString = $Item.QuietUninstallString
+                    
+                    # If QuietUninstallString is missing, use UninstallString and append a silent switch
+                    if (-not $UninstallString) {
+                        $UninstallString = $Item.UninstallString
+                        if ($UninstallString -like "*.msi*") {
+                            # Standard silent switch for MSI installers
+                            $UninstallString += " /qn" 
+                        } elseif ($UninstallString -notlike "* /s*") {
+                            # Common silent switch for executables
+                            $UninstallString += " /s" 
+                        }
+                    }
+
+                    if ($UninstallString) {
+                        # Execute the uninstall command silently using cmd and wait for it to complete
+                        Start-Process -FilePath cmd -ArgumentList "/c $UninstallString" -Wait -NoNewWindow -ErrorAction Stop | Out-Null
+                        $Result.Status = "Success"
+                        $Result.Message = "Successfully executed silent uninstall for '$($Item.DisplayName)'."
+                    } else {
+                        $Result.Status = "Failure"
+                        $Result.Message = "Could not determine a silent uninstall command for '$($Item.DisplayName)'."
+                    }
+                }
+            }
+        }
+        catch {
+            $Result.Status = "Error"
+            $Result.Message = "Error during uninstallation: $($_.Exception.Message)"
+        }
+        
+        # Output the result object back to the local machine
+        [PSCustomObject]$Result
+    }
+
+    # --- Remote Script Execution ---
+
+    # Search for Hamachi in the 64-bit path
+    Invoke-HamachiUninstall -AppDisplayName $AppToRemove -RegistryPath "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall"
+
+    # Search for Hamachi in the 32-bit path (for 32-bit apps on a 64-bit OS)
+    Invoke-HamachiUninstall -AppDisplayName $AppToRemove -RegistryPath "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+}
+
+# --- Main Script Execution (Local) ---
+
+Write-Host "Attempting silent uninstallation of '$AppName' on computer(s): $($ComputerName -join ', ')" -ForegroundColor Cyan
+
+try {
+    # Execute the script block on the remote computer(s)
+    $results = Invoke-Command -ComputerName $ComputerName -ScriptBlock $UninstallScriptBlock -ArgumentList $AppName -ErrorAction Stop
+
+    # Display the results in a readable format
+    $results | Format-Table -AutoSize
+    
+}
+catch {
+    Write-Error "An error occurred during remote execution. Ensure PowerShell Remoting (WinRM) is enabled and you have sufficient permissions on the target machine(s): $($_.Exception.Message)"
+    Write-Host "You may need to run 'Enable-PSRemoting -Force' on the target computer(s)." -ForegroundColor Yellow
+}
+
+Write-Host "--- Remote Uninstallation Attempt Complete ---" -ForegroundColor Cyan
